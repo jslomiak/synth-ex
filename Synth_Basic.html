@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Web Audio Step Sequencer</title>
+  <style>
+    body { font-family: sans-serif; background: #1e1e24; color: #fff; padding: 20px; }
+    .controls { margin-bottom: 20px; display: flex; gap: 15px; align-items: center; }
+    .grid { display: grid; grid-template-columns: 60px repeat(8, 40px); gap: 6px; }
+    .step { width: 40px; height: 40px; background: #2b2b36; border: 1px solid #444; cursor: pointer; }
+    .step.active { background: #00d2ff; }
+    .step.playing { border: 2px solid #ffaa00; }
+  </style>
+</head>
+<body>
+
+  <div class="controls">
+    <button id="playBtn">Play</button>
+    <label>BPM: <input type="range" id="bpm" min="60" max="180" value="120"> <span id="bpmVal">120</span></label>
+  </div>
+  <div class="grid" id="sequencerGrid"></div>
+
+  <script>
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const notes = [523.25, 440.00, 392.00, 329.63]; // C5, A4, G4, E4
+    const noteNames = ['C5', 'A4', 'G4', 'E4'];
+    const steps = 8;
+    
+    // State: 4 rows x 8 steps
+    const gridState = Array.from({ length: notes.length }, () => Array(steps).fill(false));
+    let isPlaying = false;
+    let currentStep = 0;
+    let nextNoteTime = 0.0;
+    let bpm = 120;
+    const notesInQueue = [];
+
+    // 1. Build the GUI
+    const gridEl = document.getElementById('sequencerGrid');
+    notes.forEach((_, rowIdx) => {
+      const label = document.createElement('div');
+      label.textContent = noteNames[rowIdx];
+      label.style.alignSelf = 'center';
+      gridEl.appendChild(label);
+
+      for (let stepIdx = 0; stepIdx < steps; stepIdx++) {
+        const btn = document.createElement('button');
+        btn.className = 'step';
+        btn.dataset.row = rowIdx;
+        btn.dataset.step = stepIdx;
+        btn.addEventListener('click', () => {
+          gridState[rowIdx][stepIdx] = !gridState[rowIdx][stepIdx];
+          btn.classList.toggle('active', gridState[rowIdx][stepIdx]);
+        });
+        gridEl.appendChild(btn);
+      }
+    });
+
+    // 2. Sound Generator with ADSR-style ramp
+    function triggerSynth(freq, time) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq, time);
+
+      gain.gain.setValueAtTime(0.001, time);
+      gain.gain.exponentialRampToValueAtTime(0.3, time + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + 0.25);
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(time);
+      osc.stop(time + 0.26);
+    }
+
+    // 3. Look-Ahead Audio Scheduler
+    function scheduler() {
+      while (nextNoteTime < audioCtx.currentTime + 0.1) {
+        // Schedule active notes for currentStep
+        notes.forEach((freq, rowIdx) => {
+          if (gridState[rowIdx][currentStep]) {
+            triggerSynth(freq, nextNoteTime);
+          }
+        });
+        notesInQueue.push({ step: currentStep, time: nextNoteTime });
+
+        // Advance step (eighth notes)
+        const secondsPerBeat = 60.0 / bpm;
+        nextNoteTime += 0.5 * secondsPerBeat;
+        currentStep = (currentStep + 1) % steps;
+      }
+      if (isPlaying) setTimeout(scheduler, 25);
+    }
+
+    // 4. Visual Playhead Loop
+    function draw() {
+      let drawStep = -1;
+      const currentTime = audioCtx.currentTime;
+      while (notesInQueue.length && notesInQueue[0].time < currentTime) {
+        drawStep = notesInQueue[0].step;
+        notesInQueue.shift();
+      }
+      if (drawStep !== -1) {
+        document.querySelectorAll('.step').forEach(el => {
+          el.classList.toggle('playing', Number(el.dataset.step) === drawStep);
+        });
+      }
+      if (isPlaying) requestAnimationFrame(draw);
+    }
+
+    // Controls
+    document.getElementById('playBtn').addEventListener('click', (e) => {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      isPlaying = !isPlaying;
+      e.target.textContent = isPlaying ? 'Stop' : 'Play';
+      if (isPlaying) {
+        currentStep = 0;
+        nextNoteTime = audioCtx.currentTime + 0.05;
+        scheduler();
+        requestAnimationFrame(draw);
+      }
+    });
+
+    document.getElementById('bpm').addEventListener('input', (e) => {
+      bpm = Number(e.target.value);
+      document.getElementById('bpmVal').textContent = bpm;
+    });
+  </script>
+</body>
+</html>
